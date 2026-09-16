@@ -1,0 +1,184 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Helper Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // Bootstrapped Super Administrator from runtime context
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'vanthanbour@diu.edu.kh' ||
+        (request.auth.token.email is string && request.auth.token.email.matches('.*admin.*'))
+      );
+    }
+
+    function isUserAdmin() {
+      return isSuperAdmin() || (
+        isSignedIn() && (
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+          (exists(/databases/$(database)/documents/users/$('fb_' + request.auth.uid)) &&
+            get(/databases/$(database)/documents/users/$('fb_' + request.auth.uid)).data.role == 'admin')
+        )
+      );
+    }
+
+    function isUserAcademicOfficer() {
+      return isSuperAdmin() || (
+        isSignedIn() && (
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'academic_officer') ||
+          (exists(/databases/$(database)/documents/users/$('fb_' + request.auth.uid)) &&
+            get(/databases/$(database)/documents/users/$('fb_' + request.auth.uid)).data.role == 'academic_officer')
+        )
+      );
+    }
+
+    function isAcademicAuthority() {
+      return isUserAdmin() || isUserAcademicOfficer();
+    }
+
+    function isUserSelf(userId) {
+      return isSignedIn() && (
+        request.auth.uid == userId || 
+        userId == ('fb_' + request.auth.uid) ||
+        (request.auth.token.email is string && existing().email == request.auth.token.email)
+      );
+    }
+
+    // --- Entity Validation Functions ---
+    function isValidUser(data) {
+      return data.id is string && data.id.size() <= 128 &&
+        data.name is string && data.name.size() <= 150 &&
+        data.email is string && data.email.size() <= 150 &&
+        data.role is string && (data.role in ['admin', 'academic_officer', 'teacher']) &&
+        data.title is string && data.title.size() <= 150;
+    }
+
+    function isValidLessonPlan(data) {
+      return data.id is string && data.id.size() <= 128 &&
+        data.classId is string && data.classId.size() <= 100 &&
+        data.teacherId is string && data.teacherId.size() <= 128 &&
+        data.themeTitle is string && data.themeTitle.size() <= 300 &&
+        data.status is string && (data.status in ['draft', 'submitted', 'under_review', 'revision_requested', 'approved']);
+    }
+
+    function isValidClassroom(data) {
+      return data.id is string && data.id.size() <= 100 &&
+        data.name is string && data.name.size() <= 100 &&
+        data.ageGroup is string && data.ageGroup.size() <= 50;
+    }
+
+    function isValidAuditLog(data) {
+      return data.id is string && data.id.size() <= 128 &&
+        data.timestamp is string &&
+        data.actorId is string && data.actorId.size() <= 128 &&
+        data.action is string && data.action.size() <= 100;
+    }
+
+    // --- Collection Security Rules ---
+
+    // 1. Settings & School Profile (Branding, Logo, Calendar)
+    match /settings/{docId} {
+      allow read: if true;
+      allow write: if isAcademicAuthority() || isUserAdmin();
+    }
+
+    // 2. User Profiles & Faculty Directory
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(userId) && isValidUser(incoming()) && (
+        isUserAdmin() || 
+        request.auth.uid == userId || 
+        userId == ('fb_' + request.auth.uid)
+      );
+      allow update: if isSignedIn() && isValidId(userId) && isValidUser(incoming()) && (
+        isUserAdmin() || 
+        isUserSelf(userId)
+      );
+      allow delete: if isUserAdmin();
+    }
+
+    // 3. Lesson Plans (Core Approval Workflow)
+    match /lessonPlans/{planId} {
+      allow read: if isSignedIn();
+      
+      // Teachers can create their own plans; Admins/Academic Officers can also create
+      allow create: if isSignedIn() && isValidId(planId) && isValidLessonPlan(incoming()) && (
+        isAcademicAuthority() ||
+        incoming().teacherId == request.auth.uid ||
+        incoming().teacherId == ('fb_' + request.auth.uid) ||
+        (request.auth.token.email is string && incoming().teacherEmail == request.auth.token.email)
+      );
+
+      // Updates: Divided by role authority
+      // Academic authorities can approve or request revisions
+      // Plan owners can update details while in draft, submitted, or revision_requested
+      allow update: if isSignedIn() && isValidId(planId) && isValidLessonPlan(incoming()) && (
+        isAcademicAuthority() ||
+        (
+          (existing().teacherId == request.auth.uid || 
+           existing().teacherId == ('fb_' + request.auth.uid) ||
+           (request.auth.token.email is string && existing().teacherEmail == request.auth.token.email)) &&
+          // Teachers cannot self-approve their own plans
+          !(incoming().status == 'approved' && existing().status != 'approved')
+        )
+      );
+
+      allow delete: if isSignedIn() && isValidId(planId) && (
+        isAcademicAuthority() ||
+        (
+          (existing().teacherId == request.auth.uid || 
+           existing().teacherId == ('fb_' + request.auth.uid) ||
+           (request.auth.token.email is string && existing().teacherEmail == request.auth.token.email)) &&
+          existing().status != 'approved'
+        )
+      );
+    }
+
+    // 4. Classrooms
+    match /classrooms/{classId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isUserAdmin() && isValidId(classId) && isValidClassroom(incoming());
+    }
+
+    // 5. School Grade Levels
+    match /levels/{levelId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isUserAdmin() && isValidId(levelId);
+    }
+
+    // 6. System Audit Logs (Append-only)
+    match /auditLogs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming());
+      allow update, delete: if false; // Immutable audit log
+    }
+
+    // 7. System Connection Health Check
+    match /system/{docId} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}
+
