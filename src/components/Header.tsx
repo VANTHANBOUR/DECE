@@ -32,7 +32,8 @@ import {
   User,
   Globe,
   ExternalLink,
-  Database
+  Database,
+  UserCheck
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -163,6 +164,18 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               Daily Routine
+            </button>
+
+            <button
+              onClick={() => setActiveTab('attendance')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                activeTab === 'attendance'
+                  ? 'bg-white text-[#007A43] shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+              }`}
+            >
+              <UserCheck className="w-3.5 h-3.5" />
+              <span>Attendance</span>
             </button>
 
             {/* Console Tab - Unrestricted access for all accounts */}
@@ -526,6 +539,17 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               ⏰ Daily Routine
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab('attendance');
+                setIsMobileMenuOpen(false);
+              }}
+              className={`p-3 rounded-xl text-left border transition-all ${
+                activeTab === 'attendance' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-slate-50 border-slate-200 text-slate-700'
+              }`}
+            >
+              📋 Student Attendance
             </button>
 
             <button

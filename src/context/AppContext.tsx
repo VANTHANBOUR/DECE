@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
-import { Classroom, LessonPlan, PlanAttachment, SchoolProfile, SystemAuditLog, UserAccount, UserRole, WeeklyComplianceRecord, SchoolLevel, CampusId, CAMPUS_LIST, isCentralHQUser, isAdminOrSuperAdmin } from '../types';
-import { INITIAL_ACCOUNTS, INITIAL_AUDIT_LOGS, INITIAL_CLASSROOMS, INITIAL_LESSON_PLANS, INITIAL_SCHOOL_PROFILE } from '../data/mockData';
+import { Classroom, LessonPlan, PlanAttachment, SchoolProfile, SystemAuditLog, UserAccount, UserRole, WeeklyComplianceRecord, SchoolLevel, CampusId, CAMPUS_LIST, isCentralHQUser, isAdminOrSuperAdmin, Student, DailyAttendanceRecord, AttendanceStatus, StudentAttendanceItem } from '../types';
+import { INITIAL_ACCOUNTS, INITIAL_AUDIT_LOGS, INITIAL_CLASSROOMS, INITIAL_LESSON_PLANS, INITIAL_SCHOOL_PROFILE, INITIAL_STUDENTS, INITIAL_ATTENDANCE_RECORDS } from '../data/mockData';
 import { isPlanFromCampus } from '../utils/campusUtils';
 import { 
   auth, 
@@ -43,6 +43,7 @@ export type NavigationTab =
   | 'compliance_matrix' 
   | 'classrooms' 
   | 'weekly_schedule' 
+  | 'attendance'
   | 'admin_console'
   | 'brand_guide';
 
@@ -110,6 +111,16 @@ interface AppContextType {
   updateClassroom: (id: string, updates: Partial<Classroom>) => void;
   deleteClassroom: (id: string) => void;
 
+  // Students & Roster
+  students: Student[];
+  addStudent: (studentData: Omit<Student, 'id'>) => Promise<Student>;
+  updateStudent: (studentId: string, updates: Partial<Student>) => Promise<void>;
+  deleteStudent: (studentId: string) => Promise<void>;
+
+  // Daily Attendance Records
+  attendanceRecords: DailyAttendanceRecord[];
+  saveAttendanceRecord: (record: Omit<DailyAttendanceRecord, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }) => Promise<DailyAttendanceRecord>;
+
   // Levels / Age Groups
   levels: SchoolLevel[];
   addLevel: (levelData: Omit<SchoolLevel, 'id'>) => SchoolLevel;
@@ -162,6 +173,8 @@ const STORAGE_KEYS = {
   SCHOOL_PROFILE: 'dch_school_profile_v5',
   LEVELS: 'dch_levels_v5',
   SELECTED_CAMPUS: 'dch_selected_campus_v5',
+  STUDENTS: 'dch_students_v5',
+  ATTENDANCE_RECORDS: 'dch_attendance_records_v5',
 };
 
 // Safe localStorage helper to prevent QuotaExceededError crashes
@@ -422,6 +435,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return DEFAULT_LEVELS;
     }
   });
+
+  // Students & Daily Attendance
+  const [students, setStudents] = useState<Student[]>(() => {
+    try {
+      const saved = safeLocalStorageGet(STORAGE_KEYS.STUDENTS);
+      return saved ? JSON.parse(saved) : INITIAL_STUDENTS;
+    } catch {
+      return INITIAL_STUDENTS;
+    }
+  });
+
+  const [attendanceRecords, setAttendanceRecords] = useState<DailyAttendanceRecord[]>(() => {
+    try {
+      const saved = safeLocalStorageGet(STORAGE_KEYS.ATTENDANCE_RECORDS);
+      return saved ? JSON.parse(saved) : INITIAL_ATTENDANCE_RECORDS;
+    } catch {
+      return INITIAL_ATTENDANCE_RECORDS;
+    }
+  });
   const [selectedPlan, setSelectedPlan] = useState<LessonPlan | null>(null);
   const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard');
   const [selectedCampusId, setSelectedCampusIdState] = useState<CampusId>(() => {
@@ -606,6 +638,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           } else if (type === 'ACCOUNTS_UPDATED') {
             const accounts = data as UserAccount[];
             setAllAccounts(accounts);
+          } else if (type === 'ATTENDANCE_SAVED') {
+            const record = data as DailyAttendanceRecord;
+            setAttendanceRecords(prev => {
+              const idx = prev.findIndex(r => r.id === record.id);
+              if (idx >= 0) {
+                const copy = [...prev];
+                copy[idx] = record;
+                return copy;
+              }
+              return [record, ...prev];
+            });
+          } else if (type === 'STUDENT_ADDED') {
+            const student = data as Student;
+            setStudents(prev => prev.some(s => s.id === student.id) ? prev : [...prev, student]);
+          } else if (type === 'STUDENT_UPDATED') {
+            const student = data as Student;
+            setStudents(prev => prev.map(s => s.id === student.id ? student : s));
+          } else if (type === 'STUDENT_DELETED') {
+            const id = data as string;
+            setStudents(prev => prev.filter(s => s.id !== id));
           } else if (type === 'FORCE_SYNC_TRIGGERED') {
             if (data?.timestamp) {
               setLastSyncedAt(data.timestamp);
@@ -632,6 +684,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else if (e.key === STORAGE_KEYS.ACCOUNTS) {
           const acc = JSON.parse(e.newValue);
           setAllAccounts(acc);
+        } else if (e.key === STORAGE_KEYS.STUDENTS) {
+          const stus = JSON.parse(e.newValue);
+          setStudents(stus);
+        } else if (e.key === STORAGE_KEYS.ATTENDANCE_RECORDS) {
+          const atts = JSON.parse(e.newValue);
+          setAttendanceRecords(atts);
         }
       } catch {}
     };
@@ -835,6 +893,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       handleSnapshotError(e, 'users');
     }
 
+    // 9. Listen for real-time Students changes from Firestore
+    let unsubStudents: (() => void) | null = null;
+    try {
+      unsubStudents = onSnapshot(collection(db, 'students'), (snapshot) => {
+        if (!snapshot.empty) {
+          const remoteStudents: Student[] = [];
+          snapshot.forEach(docSnap => {
+            remoteStudents.push({ ...(docSnap.data() as Student), id: docSnap.id });
+          });
+          setStudents(prev => {
+            const map = new Map<string, Student>();
+            prev.forEach(s => map.set(s.id, s));
+            remoteStudents.forEach(s => map.set(s.id, s));
+            return Array.from(map.values());
+          });
+        }
+      }, (err) => handleSnapshotError(err, 'students'));
+    } catch (e) {
+      handleSnapshotError(e, 'students');
+    }
+
+    // 10. Listen for real-time Attendance Records changes from Firestore
+    let unsubAttendance: (() => void) | null = null;
+    try {
+      unsubAttendance = onSnapshot(collection(db, 'attendance'), (snapshot) => {
+        if (!snapshot.empty) {
+          const remoteRecords: DailyAttendanceRecord[] = [];
+          snapshot.forEach(docSnap => {
+            remoteRecords.push({ ...(docSnap.data() as DailyAttendanceRecord), id: docSnap.id });
+          });
+          setAttendanceRecords(prev => {
+            const map = new Map<string, DailyAttendanceRecord>();
+            prev.forEach(r => map.set(r.id, r));
+            remoteRecords.forEach(r => map.set(r.id, r));
+            return Array.from(map.values()).sort((a, b) => b.date.localeCompare(a.date));
+          });
+        }
+      }, (err) => handleSnapshotError(err, 'attendance'));
+    } catch (e) {
+      handleSnapshotError(e, 'attendance');
+    }
+
     return () => {
       if (unsubPlans) unsubPlans();
       if (unsubClassrooms) unsubClassrooms();
@@ -842,6 +942,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (unsubLogs) unsubLogs();
       if (unsubProfile) unsubProfile();
       if (unsubUsers) unsubUsers();
+      if (unsubStudents) unsubStudents();
+      if (unsubAttendance) unsubAttendance();
       if (bc) bc.close();
       if (typeof window !== 'undefined') {
         window.removeEventListener('storage', handleStorageEvent);
@@ -853,6 +955,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     safeLocalStorageSet(STORAGE_KEYS.ACCOUNTS, JSON.stringify(allAccounts));
   }, [allAccounts]);
+
+  useEffect(() => {
+    safeLocalStorageSet(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
+  }, [students]);
+
+  useEffect(() => {
+    safeLocalStorageSet(STORAGE_KEYS.ATTENDANCE_RECORDS, JSON.stringify(attendanceRecords));
+  }, [attendanceRecords]);
 
   useEffect(() => {
     safeLocalStorageSet(STORAGE_KEYS.LEVELS, JSON.stringify(levels));
@@ -1644,6 +1754,117 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast(`Classroom "${className}" removed successfully`, 'info');
   };
 
+  // --- Students Roster Management ---
+  const addStudent = async (studentData: Omit<Student, 'id'>): Promise<Student> => {
+    const newStudent: Student = {
+      ...studentData,
+      id: `stu_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      status: studentData.status || 'active',
+    };
+
+    setStudents(prev => [...prev, newStudent]);
+
+    // Automatically update classroom enrolled count
+    setClassrooms(prev => prev.map(c => {
+      if (c.id === newStudent.classId) {
+        return { ...c, enrolledStudents: (c.enrolledStudents || 0) + 1 };
+      }
+      return c;
+    }));
+
+    try {
+      const cleanStudent = sanitizeForFirestore(newStudent);
+      setDoc(doc(db, 'students', newStudent.id), cleanStudent, { merge: true }).catch(() => {});
+    } catch {}
+
+    broadcastLiveSync('STUDENT_ADDED', newStudent);
+    addAuditLog('ADD_CLASSROOM', `Enrolled pupil ${newStudent.name} (${newStudent.khmerName || ''}) in class ${newStudent.className || newStudent.classId}`, newStudent.id);
+    showToast(`Enrolled student ${newStudent.name}!`, 'success');
+    return newStudent;
+  };
+
+  const updateStudent = async (studentId: string, updates: Partial<Student>): Promise<void> => {
+    const target = students.find(s => s.id === studentId);
+    if (!target) return;
+
+    const updated: Student = { ...target, ...updates };
+    setStudents(prev => prev.map(s => s.id === studentId ? updated : s));
+
+    try {
+      const cleanStudent = sanitizeForFirestore(updated);
+      setDoc(doc(db, 'students', studentId), cleanStudent, { merge: true }).catch(() => {});
+    } catch {}
+
+    broadcastLiveSync('STUDENT_UPDATED', updated);
+    showToast(`Student ${updated.name} profile updated`, 'success');
+  };
+
+  const deleteStudent = async (studentId: string): Promise<void> => {
+    const target = students.find(s => s.id === studentId);
+    setStudents(prev => prev.filter(s => s.id !== studentId));
+
+    if (target) {
+      setClassrooms(prev => prev.map(c => {
+        if (c.id === target.classId) {
+          return { ...c, enrolledStudents: Math.max(0, (c.enrolledStudents || 1) - 1) };
+        }
+        return c;
+      }));
+    }
+
+    try {
+      deleteDoc(doc(db, 'students', studentId)).catch(() => {});
+    } catch {}
+
+    broadcastLiveSync('STUDENT_DELETED', studentId);
+    showToast(`Removed student ${target?.name || studentId}`, 'info');
+  };
+
+  // --- Daily Attendance Recording ---
+  const saveAttendanceRecord = async (
+    recordData: Omit<DailyAttendanceRecord, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }
+  ): Promise<DailyAttendanceRecord> => {
+    const recordId = recordData.id || `att_${recordData.classId}_${recordData.date.replace(/[^a-zA-Z0-9]/g, '_')}_${recordData.session || 'full_day'}`;
+    const now = new Date().toISOString();
+
+    const existing = attendanceRecords.find(r => r.id === recordId);
+    const fullRecord: DailyAttendanceRecord = {
+      ...recordData,
+      id: recordId,
+      session: recordData.session || 'full_day',
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+    };
+
+    setAttendanceRecords(prev => {
+      const idx = prev.findIndex(r => r.id === recordId);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = fullRecord;
+        return copy;
+      }
+      return [fullRecord, ...prev];
+    });
+
+    try {
+      const cleanRecord = sanitizeForFirestore(fullRecord);
+      setDoc(doc(db, 'attendance', recordId), cleanRecord, { merge: true }).catch(err => {
+        handleFirestoreError(err, OperationType.WRITE, `attendance/${recordId}`);
+      });
+    } catch (e) {
+      console.warn('Firestore attendance save notice:', e);
+    }
+
+    broadcastLiveSync('ATTENDANCE_SAVED', fullRecord);
+    addAuditLog(
+      'UPDATE_CLASSROOM',
+      `Recorded daily attendance for ${fullRecord.className} (${fullRecord.presentCount}/${fullRecord.totalStudents} present, ${fullRecord.attendanceRate}%) for date ${fullRecord.date}`,
+      recordId
+    );
+    showToast(`Attendance recorded for ${fullRecord.className} (${fullRecord.date})!`, 'success');
+    return fullRecord;
+  };
+
   const addLevel = (levelData: Omit<SchoolLevel, 'id'>): SchoolLevel => {
     const newLevel: SchoolLevel = {
       ...levelData,
@@ -1758,15 +1979,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await setDoc(doc(db, 'users', u.id), cleanUser, { merge: true }).catch(() => {});
       }
 
-      // 5. Broadcast to all open tabs and windows
+      // 5. Sanitize & write all Grade Levels
+      for (const lvl of levels) {
+        const cleanLevel = sanitizeForFirestore(lvl);
+        await setDoc(doc(db, 'levels', lvl.id), cleanLevel, { merge: true }).catch(() => {});
+      }
+
+      // 6. Sanitize & write all Students
+      for (const student of students) {
+        const cleanStudent = sanitizeForFirestore(student);
+        await setDoc(doc(db, 'students', student.id), cleanStudent, { merge: true }).catch(() => {});
+      }
+
+      // 7. Sanitize & write all Attendance Records
+      for (const record of attendanceRecords) {
+        const cleanRecord = sanitizeForFirestore(record);
+        await setDoc(doc(db, 'attendance', record.id), cleanRecord, { merge: true }).catch(() => {});
+      }
+
+      // 8. Connection Health Check marker
+      await setDoc(doc(db, 'system', 'connection_test'), {
+        status: 'online',
+        lastChecked: now,
+        service: 'Dewey Kindergarten & Childcare House Cloud Sync',
+        institution: 'Dewey Early Childhood Education'
+      }).catch(() => {});
+
+      // 9. Broadcast to all open tabs and windows
       broadcastLiveSync('FORCE_SYNC_TRIGGERED', {
         timestamp: now,
         sender: currentUser?.name || 'Staff Member',
-        message: customMessage || `Manual Push Live Update synchronized (${lessonPlans.length} plans, ${classrooms.length} classrooms)`
+        message: customMessage || `Manual Push Live Update synchronized (${lessonPlans.length} plans, ${classrooms.length} classrooms, ${students.length} students, ${attendanceRecords.length} attendance records)`
       });
 
       setLastSyncedAt(now);
-      addAuditLog('PUSH_LIVE_UPDATE', customMessage || `Pushed live updates & synchronized institutional database (${lessonPlans.length} plans, ${classrooms.length} classrooms)`);
+      addAuditLog('PUSH_LIVE_UPDATE', customMessage || `Pushed live updates & synchronized institutional database (${lessonPlans.length} plans, ${classrooms.length} classrooms, ${students.length} students, ${attendanceRecords.length} attendance records)`);
       showToast('🚀 Live update successfully pushed & synced with Firebase cloud!', 'success');
     } catch (err: any) {
       console.warn('Push live update notice:', err);
@@ -1994,6 +2241,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addClassroom,
         updateClassroom,
         deleteClassroom,
+        students,
+        addStudent,
+        updateStudent,
+        deleteStudent,
+        attendanceRecords,
+        saveAttendanceRecord,
         levels: processedLevels,
         addLevel,
         updateLevel,

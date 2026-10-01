@@ -245,6 +245,60 @@ export interface Classroom {
   currentTheme: string;
 }
 
+export type AttendanceStatus = 'present' | 'absent' | 'late' | 'excused';
+
+export interface Student {
+  id: string;
+  rollNumber: string;
+  name: string;
+  khmerName: string;
+  classId: string;
+  className?: string;
+  campusId?: CampusId;
+  gender: 'M' | 'F';
+  dob?: string;
+  avatar?: string;
+  parentName?: string;
+  parentPhone?: string;
+  emergencyContact?: string;
+  allergiesOrMedical?: string;
+  notes?: string;
+  status?: 'active' | 'inactive';
+}
+
+export interface StudentAttendanceItem {
+  studentId: string;
+  studentName: string;
+  khmerName?: string;
+  rollNumber?: string;
+  status: AttendanceStatus;
+  arrivalTime?: string;
+  temperature?: string;
+  remarks?: string;
+}
+
+export interface DailyAttendanceRecord {
+  id: string;
+  classId: string;
+  className: string;
+  campusId?: CampusId;
+  date: string; // YYYY-MM-DD
+  session: 'full_day' | 'morning' | 'afternoon';
+  recordedByTeacherId: string;
+  recordedByTeacherName: string;
+  recordedByTeacherEmail?: string;
+  totalStudents: number;
+  presentCount: number;
+  absentCount: number;
+  lateCount: number;
+  excusedCount: number;
+  attendanceRate: number; // 0-100
+  records: Record<string, StudentAttendanceItem>;
+  generalNotes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PlanAttachment {
   id: string;
   name: string;

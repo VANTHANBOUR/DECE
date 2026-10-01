@@ -111,6 +111,53 @@
         "khmerName": { "type": "string", "maxLength": 100 }
       },
       "required": ["id", "name", "displayName"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Enrolled kindergarten pupil profile and parent emergency contacts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "rollNumber": { "type": "string", "maxLength": 50 },
+        "name": { "type": "string", "maxLength": 150 },
+        "khmerName": { "type": "string", "maxLength": 150 },
+        "classId": { "type": "string", "maxLength": 100 },
+        "className": { "type": "string", "maxLength": 100 },
+        "campusId": { "type": "string", "maxLength": 50 },
+        "gender": { "type": "string", "enum": ["M", "F"] },
+        "dob": { "type": "string", "maxLength": 30 },
+        "parentName": { "type": "string", "maxLength": 150 },
+        "parentPhone": { "type": "string", "maxLength": 50 },
+        "emergencyContact": { "type": "string", "maxLength": 50 },
+        "allergiesOrMedical": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["active", "inactive"] }
+      },
+      "required": ["id", "name", "classId"]
+    },
+    "AttendanceRecord": {
+      "title": "Daily Student Attendance Record",
+      "description": "Daily early childhood classroom student attendance record with statuses, temperatures, and remarks",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "classId": { "type": "string", "maxLength": 100 },
+        "className": { "type": "string", "maxLength": 100 },
+        "campusId": { "type": "string", "maxLength": 50 },
+        "date": { "type": "string", "maxLength": 30 },
+        "session": { "type": "string", "enum": ["full_day", "morning", "afternoon"] },
+        "recordedByTeacherId": { "type": "string", "maxLength": 128 },
+        "recordedByTeacherName": { "type": "string", "maxLength": 150 },
+        "totalStudents": { "type": "number" },
+        "presentCount": { "type": "number" },
+        "absentCount": { "type": "number" },
+        "lateCount": { "type": "number" },
+        "excusedCount": { "type": "number" },
+        "attendanceRate": { "type": "number" },
+        "generalNotes": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "classId", "date", "recordedByTeacherId"]
     }
   },
   "firestore": {
@@ -137,6 +184,14 @@
     "/levels/{levelId}": {
       "schema": { "$ref": "#/entities/SchoolLevel" },
       "description": "Classroom grade and age tier definitions"
+    },
+    "/students/{studentId}": {
+      "schema": { "$ref": "#/entities/Student" },
+      "description": "Enrolled student rosters per classroom"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Daily student attendance records"
     }
   }
 }

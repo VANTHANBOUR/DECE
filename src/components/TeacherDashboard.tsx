@@ -24,7 +24,8 @@ import {
   Table,
   Camera,
   User,
-  Printer
+  Printer,
+  UserCheck
 } from 'lucide-react';
 
 interface TeacherDashboardProps {
@@ -40,7 +41,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   onSelectPlan,
   onEditPlan,
 }) => {
-  const { currentUser, userLessonPlans, submitLessonPlan, classrooms, showToast, formatAgeGroup, selectedCampusId } = useApp();
+  const { currentUser, userLessonPlans, submitLessonPlan, classrooms, showToast, formatAgeGroup, selectedCampusId, setActiveTab } = useApp();
   const activeCampus = selectedCampusId ? CAMPUS_LIST.find(c => c.id === selectedCampusId) : null;
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
@@ -148,18 +149,25 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
           <div className="flex flex-wrap items-center gap-3">
             <button
+              onClick={() => setActiveTab('attendance')}
+              className="flex items-center gap-2 px-4 py-2.5 bg-white/20 hover:bg-white/30 text-white font-extrabold text-xs rounded-2xl border border-white/30 backdrop-blur-xs transition-all active:scale-95 shadow-xs"
+            >
+              <UserCheck className="w-4 h-4 text-emerald-200" />
+              <span>Take Attendance</span>
+            </button>
+            <button
               onClick={() => setIsProfileModalOpen(true)}
               className="flex items-center gap-2 px-4 py-2.5 bg-white/15 hover:bg-white/25 text-white font-bold text-xs rounded-2xl border border-white/25 backdrop-blur-xs transition-all active:scale-95"
             >
               <User className="w-4 h-4 text-amber-300" />
-              <span>Update Profile & Photo</span>
+              <span>Update Profile</span>
             </button>
             <button
               onClick={onOpenNewPlan}
               className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-amber-950 font-extrabold text-xs sm:text-sm rounded-2xl shadow-sm hover:shadow-md transition-all active:scale-95"
             >
               <Plus className="w-5 h-5 stroke-[2.5]" />
-              <span>Create / Upload Lesson Plan</span>
+              <span>Create Lesson Plan</span>
             </button>
           </div>
         </div>

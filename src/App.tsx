@@ -8,6 +8,7 @@ import { LessonPlanEditor } from './components/LessonPlanEditor';
 import { LessonPlanDetailModal } from './components/LessonPlanDetailModal';
 import { ClassroomDirectory } from './components/ClassroomDirectory';
 import { WeeklyScheduleCalendar } from './components/WeeklyScheduleCalendar';
+import { AttendanceManager } from './components/AttendanceManager';
 import { NewTeacherModal } from './components/NewTeacherModal';
 import { AuthModal } from './components/AuthModal';
 import { AuthGate } from './components/AuthGate';
@@ -121,6 +122,8 @@ const MainContent: React.FC = () => {
             onSelectPlan={handleSelectPlan}
             onOpenNewTeacher={() => setIsNewTeacherOpen(true)}
           />
+        ) : activeTab === 'attendance' ? (
+          <AttendanceManager />
         ) : activeTab === 'dashboard' || activeTab === 'lesson_plans' ? (
           isSuperOrAdmin ? (
             <AdminDashboard
